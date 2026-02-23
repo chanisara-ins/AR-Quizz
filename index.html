@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Quiz - Student Portal</title>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root { --p: #0288d1; --bg: #f0f4f8; }
+        body { font-family: 'Sarabun', sans-serif; background: var(--bg); margin: 0; padding: 20px; }
+        .card { background: white; border-radius: 20px; padding: 30px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; max-width: 500px; margin: 0 auto; }
+        input { width: 100%; padding: 15px; margin: 10px 0; border: 2px solid #eee; border-radius: 12px; box-sizing: border-box; }
+        .btn-start { background: var(--p); color: white; border: none; width: 100%; padding: 15px; border-radius: 12px; font-weight: 600; cursor: pointer; }
+        #viewer-container { width: 100%; height: 300px; background: #000; border-radius: 15px; margin-bottom: 20px; }
+        .choice-btn { display: block; width: 100%; padding: 15px; margin: 10px 0; border: 2px solid #eee; border-radius: 12px; background: white; cursor: pointer; text-align: left; }
+    </style>
+</head>
+<body>
+
+<div id="login-page" class="card">
+    <h2 style="color:var(--p);">📝 เริ่มทำข้อสอบ</h2>
+    <input type="text" id="student-name" placeholder="ชื่อ-นามสกุล">
+    <input type="text" id="quiz-id" placeholder="รหัสข้อสอบ (ID)">
+    <button class="btn-start" onclick="checkQuiz()">เข้าสู่ห้องสอบ</button>
+</div>
+
+<div id="quiz-page" style="display:none;" class="card">
+    <div id="viewer-container">
+        <model-viewer id="ar-v" camera-controls ar shadow-intensity="1" auto-rotate style="width:100%; height:100%;"></model-viewer>
+    </div>
+    <h3 id="q-text">กำลังโหลด...</h3>
+    <div id="options-area"></div>
+</div>
+
+<script>
+    const firebaseConfig = {
+        apiKey: "AIzaSyDBvaBLaqywJ-J3J6hH_UwyF-WmultPim4",
+        authDomain: "ar-quizz.firebaseapp.com",
+        projectId: "ar-quizz",
+        databaseURL: "https://ar-quizz-default-rtdb.asia-southeast1.firebasedatabase.app",
+        storageBucket: "ar-quizz.firebasestorage.app",
+        messagingSenderId: "151328581741",
+        appId: "1:151328581741:web:d148eaa15b7a24b0dcf764"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    let questions = [];
+    let currentIdx = 0;
+    let studentName = "";
+    let quizId = "";
+    
+    // --- ตัวแปรเก็บพฤติกรรม (Analytics) ---
+    let startTime, moveCount = 0, arUsed = "No";
+
+    window.checkQuiz = function() {
+        studentName = document.getElementById('student-name').value;
+        quizId = document.getElementById('quiz-id').value.trim();
+        if(!studentName || !quizId) return alert("กรุณากรอกข้อมูล");
+
+        db.ref('quizzes/' + quizId).once('value', (s) => {
+            if(s.val()) {
+                questions = s.val().questions;
+                document.getElementById('login-page').style.display = 'none';
+                document.getElementById('quiz-page').style.display = 'block';
+                startQuestion();
+            } else alert("ไม่พบรหัสข้อสอบ");
+        });
+    }
+
+    function startQuestion() {
+        if(currentIdx >= questions.length) {
+            alert("บันทึกคำตอบเรียบร้อยแล้ว");
+            location.reload();
+            return;
+        }
+        startTime = Date.now(); // เริ่มจับเวลา
+        moveCount = 0; arUsed = "No"; // รีเซ็ตพฤติกรรมใหม่ทุกข้อ
+        
+        const q = questions[currentIdx];
+        document.getElementById('q-text').innerText = q.q;
+        const viewer = document.getElementById('ar-v');
+        viewer.src = q.m;
+
+        // ดักจับการใช้ AR และการหมุนโมเดล
+        viewer.addEventListener('ar-status', (e) => { if(e.detail.status === 'session-started') arUsed = "Yes"; });
+        viewer.addEventListener('camera-change', () => { moveCount++; });
+
+        const area = document.getElementById('options-area');
+        area.innerHTML = '';
+        q.o.forEach(opt => {
+            const btn = document.createElement('button');
+            btn.className = 'choice-btn';
+            btn.innerText = opt;
+            btn.onclick = () => submitAnswer(opt, q.a);
+            area.appendChild(btn);
+        });
+    }
+
+    function submitAnswer(chosen, correct) {
+        const timeSpent = Math.floor((Date.now() - startTime) / 1000); // คำนวณวินาที
+        const isCorrect = (chosen.trim() === correct.trim()) ? 1 : 0;
+        
+        // ส่งข้อมูลพฤติกรรมเข้า student_logs
+        db.ref('student_logs').push({
+            name: studentName,
+            quizId: quizId,
+            qIdx: currentIdx,
+            time: timeSpent, // 1. ระยะเวลา
+            moves: moveCount, // 2. การตอบสนอง
+            ar: arUsed,       // 3. การใช้ AR
+            correct: isCorrect, // 4. ความถูกต้อง
+            confidence: (isCorrect && timeSpent < 10) ? "High" : "Normal", // 5. ความมั่นใจ (ประเมินเบื้องต้น)
+            timestamp: new Date().toLocaleString() // 6. ลำดับเวลา
+        });
+
+        currentIdx++;
+        startQuestion();
+    }
+</script>
+</body>
+</html>
